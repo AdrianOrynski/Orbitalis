@@ -133,7 +133,7 @@ Goal:
   * position
   * velocity
   * acceleration
-* Implement numerical integration (Euler / Semi-Implicit Euler)
+* Implement numerical integration
 
 Goal:
 
