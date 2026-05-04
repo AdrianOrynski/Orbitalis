@@ -1,25 +1,25 @@
 #include "GravityController.h"
+#include "../Spacecraft/SpacecraftPawn.h"   // <-- new include for Week 4
 
 AGravityController::AGravityController()
 {
-    // The controller ticks BEFORE SpaceObjects so forces are applied first.
     PrimaryActorTick.bCanEverTick = true;
-    PrimaryActorTick.TickGroup    = TG_PrePhysics;
+    PrimaryActorTick.TickGroup = TG_PrePhysics;
 }
 
 void AGravityController::BeginPlay()
 {
     Super::BeginPlay();
-
-    // Assign initial orbital velocities to all objects already set in the editor.
     InitialiseAllOrbits();
+    // Spacecraft orbit is initialised from ASpacecraftPawn::BeginPlay instead,
+    // because PhysBody must be ready before InitOrbit is called.
 }
 
 void AGravityController::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // Apply gravitational force to every registered object every frame.
+    // Apply gravity to passive space objects (planets, probes …)
     for (ASpaceObject* Obj : OrbitingObjects)
     {
         if (IsValid(Obj))
@@ -27,47 +27,67 @@ void AGravityController::Tick(float DeltaTime)
             ApplyGravityTo(Obj);
         }
     }
+
+    // Apply gravity to player / AI spacecraft
+    for (ASpacecraftPawn* SC : OrbitingSpacecraft)
+    {
+        if (IsValid(SC))
+        {
+            ApplyGravityToSpacecraft(SC);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Private helpers
+// Gravity helpers  (shared formula, different target types)
 // ---------------------------------------------------------------------------
 
 void AGravityController::ApplyGravityTo(ASpaceObject* Object) const
 {
-    // Source position in UE world space [cm]
     const FVector SourcePos = GetActorLocation();
-    // Object position from physics state [cm]
     const FVector ObjectPos = Object->GetPhysicsPosition();
 
-    // Direction vector from object TO source (gravity pulls inward)
-    FVector Direction = SourcePos - ObjectPos;  // [cm]
-
-    // Distance in metres  (physics engine works in SI)
+    FVector Direction = SourcePos - ObjectPos;
     const double DistanceCm = Direction.Size();
-    const double DistanceM  = DistanceCm * 0.01;
+    const double DistanceM = DistanceCm * 0.01;
 
-    if (DistanceM < MinDistance)
-    {
-        // Too close – skip to avoid singularity / numerical blow-up
-        return;
-    }
+    if (DistanceM < MinDistance) return;
 
-    // Normalise direction
     Direction /= static_cast<float>(DistanceCm);
 
-    // Newton's law of gravitation:  F = G * M * m / r²
     const double ForceMagnitude = GravitationalConstant
-                                  * SourceMass
-                                  * Object->PhysBody.mass
-                                  / (DistanceM * DistanceM);   // [N]
+        * SourceMass
+        * Object->PhysBody.mass
+        / (DistanceM * DistanceM);
 
-    // Build force vector [N] – FVector stores floats but physics engine
-    // accumulates doubles through AddForce(Vector3), so cast is safe here.
-    const FVector GravityForce = Direction * static_cast<float>(ForceMagnitude);
-
-    Object->ApplyGravityForce(GravityForce);
+    Object->ApplyGravityForce(Direction * static_cast<float>(ForceMagnitude));
 }
+
+void AGravityController::ApplyGravityToSpacecraft(ASpacecraftPawn* Spacecraft) const
+{
+    const FVector SourcePos = GetActorLocation();
+    const FVector ObjectPos = Spacecraft->GetPhysicsPosition();
+
+    FVector Direction = SourcePos - ObjectPos;
+    const double DistanceCm = Direction.Size();
+    const double DistanceM = DistanceCm * 0.01;
+
+    if (DistanceM < MinDistance) return;
+
+    Direction /= static_cast<float>(DistanceCm);
+
+    // Use PhysBody.mass so it tracks fuel burn (shrinking mass over time)
+    const double ForceMagnitude = GravitationalConstant
+        * SourceMass
+        * Spacecraft->PhysBody.mass
+        / (DistanceM * DistanceM);
+
+    Spacecraft->ApplyGravityForce(Direction * static_cast<float>(ForceMagnitude));
+}
+
+// ---------------------------------------------------------------------------
+// Orbit initialisation
+// ---------------------------------------------------------------------------
 
 void AGravityController::InitialiseAllOrbits()
 {
@@ -75,58 +95,84 @@ void AGravityController::InitialiseAllOrbits()
     {
         if (IsValid(Obj))
         {
-            Obj->InitOrbit(
-                Obj->GetActorLocation(),   // current world position [cm]
-                GetActorLocation(),        // source position [cm]
-                SourceMass,
-                GravitationalConstant
-            );
+            Obj->InitOrbit(Obj->GetActorLocation(), GetActorLocation(),
+                SourceMass, GravitationalConstant);
+        }
+    }
+}
+
+void AGravityController::InitialiseAllSpacecraftOrbits()
+{
+    for (ASpacecraftPawn* SC : OrbitingSpacecraft)
+    {
+        if (IsValid(SC))
+        {
+            SC->InitOrbit(SC->GetActorLocation(), GetActorLocation(),
+                SourceMass, GravitationalConstant);
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Runtime registration
+// Runtime registration – passive objects
 // ---------------------------------------------------------------------------
 
 void AGravityController::RegisterSpaceObject(ASpaceObject* Object)
 {
-    if (!IsValid(Object))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("AGravityController::RegisterSpaceObject – null object passed."));
-        return;
-    }
+    if (!IsValid(Object)) return;
+    if (OrbitingObjects.Contains(Object)) return;
 
-    if (OrbitingObjects.Contains(Object))
-    {
-        UE_LOG(LogTemp, Warning,
-               TEXT("AGravityController::RegisterSpaceObject – '%s' already registered."),
-               *Object->GetName());
-        return;
-    }
-
-    // Compute orbital velocity before adding to list
-    Object->InitOrbit(
-        Object->GetActorLocation(),
-        GetActorLocation(),
-        SourceMass,
-        GravitationalConstant
-    );
-
+    Object->InitOrbit(Object->GetActorLocation(), GetActorLocation(),
+        SourceMass, GravitationalConstant);
     OrbitingObjects.Add(Object);
-
-    UE_LOG(LogTemp, Log,
-           TEXT("AGravityController: registered '%s' (total: %d)"),
-           *Object->GetName(), OrbitingObjects.Num());
 }
 
 void AGravityController::UnregisterSpaceObject(ASpaceObject* Object)
 {
-    const int32 Removed = OrbitingObjects.Remove(Object);
+    OrbitingObjects.Remove(Object);
+}
+
+// ---------------------------------------------------------------------------
+// Runtime registration – spacecraft
+// ---------------------------------------------------------------------------
+
+void AGravityController::RegisterSpacecraft(ASpacecraftPawn* Spacecraft, bool bInitOrbit)
+{
+    if (!IsValid(Spacecraft))
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("AGravityController::RegisterSpacecraft – null pawn passed."));
+        return;
+    }
+
+    if (OrbitingSpacecraft.Contains(Spacecraft))
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("AGravityController::RegisterSpacecraft – '%s' already registered."),
+            *Spacecraft->GetName());
+        return;
+    }
+
+    if (bInitOrbit)
+    {
+        Spacecraft->InitOrbit(Spacecraft->GetActorLocation(), GetActorLocation(),
+            SourceMass, GravitationalConstant);
+    }
+
+    OrbitingSpacecraft.Add(Spacecraft);
+
+    UE_LOG(LogTemp, Log,
+        TEXT("AGravityController: registered spacecraft '%s' (total spacecraft: %d)"),
+        *Spacecraft->GetName(), OrbitingSpacecraft.Num());
+}
+
+void AGravityController::UnregisterSpacecraft(ASpacecraftPawn* Spacecraft)
+{
+    const int32 Removed = OrbitingSpacecraft.Remove(Spacecraft);
     if (Removed > 0)
     {
         UE_LOG(LogTemp, Log,
-               TEXT("AGravityController: unregistered '%s' (total: %d)"),
-               *Object->GetName(), OrbitingObjects.Num());
+            TEXT("AGravityController: unregistered spacecraft '%s'"),
+            *Spacecraft->GetName());
     }
 }

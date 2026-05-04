@@ -6,6 +6,10 @@
 
 #include "GravityController.generated.h"
 
+// Forward-declare so we avoid a circular include.
+// The pawn is in a different folder and includes us, so we go through a pointer.
+class ASpacecraftPawn;
+
 /**
  * AGravityController
  *
@@ -22,6 +26,10 @@
  * Physics formula used:
  *   F = G * M * m / r²   (Newton's law of universal gravitation)
  *   direction: from object towards source (attractive force)
+ *
+ * Week 4 addition:
+ *   - RegisterSpacecraft() / UnregisterSpacecraft() allow the player pawn
+ *     (ASpacecraftPawn) to receive gravity without inheriting ASpaceObject.
  */
 UCLASS(BlueprintType, Blueprintable)
 class ORBITALIS_API AGravityController : public AActor
@@ -55,7 +63,7 @@ public:
     double MinDistance = 100.0;
 
     // -------------------------------------------------------
-    // Managed objects
+    // Managed objects  (passive bodies – planets, debris …)
     // -------------------------------------------------------
 
     /** Space objects that orbit this controller.
@@ -64,23 +72,41 @@ public:
     TArray<ASpaceObject*> OrbitingObjects;
 
     // -------------------------------------------------------
-    // Blueprint
+    // Managed spacecraft (player / AI pawns)
     // -------------------------------------------------------
 
-    /** Registers a new space object, computes its initial orbital velocity
-     *  and adds it to the managed list.  Call this at runtime to spawn
-     *  objects into orbit dynamically. */
+    /** Player-controlled spacecraft that should receive gravity.
+     *  Assign in the editor (drag the pawn into this slot) or call
+     *  RegisterSpacecraft() at runtime. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity|Spacecraft")
+    TArray<ASpacecraftPawn*> OrbitingSpacecraft;
+
+    // -------------------------------------------------------
+    // Blueprint API – passive objects
+    // -------------------------------------------------------
+
     UFUNCTION(BlueprintCallable, Category = "Gravity")
     void RegisterSpaceObject(ASpaceObject* Object);
 
-    /** Removes an object from gravitational influence. */
     UFUNCTION(BlueprintCallable, Category = "Gravity")
     void UnregisterSpaceObject(ASpaceObject* Object);
 
-private:
-    /** Computes and applies gravitational force to a single object. */
-    void ApplyGravityTo(ASpaceObject* Object) const;
+    // -------------------------------------------------------
+    // Blueprint API – spacecraft (player / AI)
+    // -------------------------------------------------------
 
-    /** Initialises orbital velocity for all objects already in OrbitingObjects. */
+    /** Registers the spacecraft pawn for gravity, optionally initialising
+     *  a circular orbit velocity (bInitOrbit = true by default). */
+    UFUNCTION(BlueprintCallable, Category = "Gravity|Spacecraft")
+    void RegisterSpacecraft(ASpacecraftPawn* Spacecraft, bool bInitOrbit = true);
+
+    UFUNCTION(BlueprintCallable, Category = "Gravity|Spacecraft")
+    void UnregisterSpacecraft(ASpacecraftPawn* Spacecraft);
+
+private:
+    void ApplyGravityTo(ASpaceObject* Object) const;
+    void ApplyGravityToSpacecraft(ASpacecraftPawn* Spacecraft) const;
+
     void InitialiseAllOrbits();
+    void InitialiseAllSpacecraftOrbits();
 };
