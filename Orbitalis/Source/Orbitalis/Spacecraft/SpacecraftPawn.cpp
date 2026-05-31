@@ -5,6 +5,9 @@
 #include "Camera/CameraComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "EnhancedInputComponent.h"
+#include "Components/SphereComponent.h"
+#include "Camera/CameraComponent.h"
+#include "../Mission/SpaceStation.h"
 #include "EnhancedInputSubsystems.h"
 #include <cmath>
 
@@ -37,6 +40,14 @@ ASpacecraftPawn::ASpacecraftPawn()
     Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
     Camera->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
     Camera->bUsePawnControlRotation = false;
+
+    // Spacecraft collision sphere
+    SpacecraftCollider = CreateDefaultSubobject<USphereComponent>(TEXT("SpacecraftCollider"));
+    SpacecraftCollider->SetupAttachment(RootComponent);
+    SpacecraftCollider->SetSphereRadius(80.0f);
+    SpacecraftCollider->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    SpacecraftCollider->SetCollisionResponseToAllChannels(ECR_Overlap);
+    SpacecraftCollider->SetGenerateOverlapEvents(true);
 }
 
 
@@ -72,12 +83,21 @@ void ASpacecraftPawn::BeginPlay()
         GravitySourcePosition = GravitySource->GetActorLocation();
         InitOrbit(GetActorLocation(), GravitySource->GetActorLocation(),
             GravitySource->SourceMass, GravitySource->GravitationalConstant);
+        GravitySource->RegisterSpacecraft(this, false);
+        AddTickPrerequisiteActor(GravitySource);
     }
+
+    TArray<AActor*> FoundStations;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ASpaceStation::StaticClass(), FoundStations);
+    if (FoundStations.Num() > 0)
+        TargetStation = Cast<ASpaceStation>(FoundStations[0]);
 }
 
 void ASpacecraftPawn::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+
+    if (!HasActorBegunPlay()) return;
 
     ApplyThrusterForces(DeltaTime);
     IntegrateAngularVelocity(DeltaTime);
@@ -87,6 +107,8 @@ void ASpacecraftPawn::Tick(float DeltaTime)
 
     if (IsValid(GravitySource))
         GravitySourcePosition = GravitySource->GetActorLocation();
+
+    TickCameraMode();
 }
 
 void ASpacecraftPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -119,6 +141,10 @@ void ASpacecraftPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComp
     Bind(IA_Right_Down, &ASpacecraftPawn::OnRightDown);
     Bind(IA_Right_Left, &ASpacecraftPawn::OnRightLeft);
     Bind(IA_Right_Right, &ASpacecraftPawn::OnRightRight);
+
+    Bind(IA_Cam_Chase,    &ASpacecraftPawn::OnCamChase);
+    Bind(IA_Cam_Overview, &ASpacecraftPawn::OnCamOverview);
+    Bind(IA_Cam_Docking,  &ASpacecraftPawn::OnCamDocking);
 }
 
 // ── Input callbacks ──────────────────────────────────────────────────────────
@@ -230,6 +256,88 @@ void ASpacecraftPawn::ConsumeFuel(double TotalForce, float DeltaTime)
 {
     CurrentFuel = FMath::Max(CurrentFuel - TotalForce * FuelConsumptionRate * DeltaTime, 0.0);
     PhysBody.mass = FMath::Max(Mass - (FuelMass - CurrentFuel), 1.0);
+}
+
+
+// ── Camera selection ──────────────────────────────────────────────────────────
+
+void ASpacecraftPawn::CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult)
+{
+    if (Camera)
+    {
+        Camera->GetCameraView(DeltaTime, OutResult);
+        return;
+    }
+    Super::CalcCamera(DeltaTime, OutResult);
+}
+
+// ── Camera mode callbacks ─────────────────────────────────────────────────────
+
+void ASpacecraftPawn::OnCamChase(const FInputActionValue&)
+{
+    CurrentCameraMode = ECameraMode::Chase;
+    UpdateCameraMode();
+}
+
+void ASpacecraftPawn::OnCamOverview(const FInputActionValue&)
+{
+    CurrentCameraMode = ECameraMode::Overview;
+    UpdateCameraMode();
+}
+
+void ASpacecraftPawn::OnCamDocking(const FInputActionValue&)
+{
+    CurrentCameraMode = ECameraMode::Docking;
+    UpdateCameraMode();
+}
+
+void ASpacecraftPawn::UpdateCameraMode()
+{
+    TickCameraMode();
+}
+
+void ASpacecraftPawn::TickCameraMode()
+{
+    switch (CurrentCameraMode)
+    {
+    case ECameraMode::Chase:
+    {
+        SpringArm->SetRelativeLocation(FVector::ZeroVector);
+        SpringArm->TargetArmLength = 600.0f;
+        const FVector WorldVel = ToUnreal(PhysBody.state.velocity);
+        if (!WorldVel.IsNearlyZero(1.0f))
+            SpringArm->SetWorldRotation((-WorldVel.GetSafeNormal()).Rotation());
+        break;
+    }
+
+    case ECameraMode::Overview:
+    {
+        const FVector TargetPos = IsValid(TargetStation)
+            ? TargetStation->GetActorLocation()
+            : GravitySourcePosition;
+        const FVector ToTarget = (TargetPos - GetActorLocation()).GetSafeNormal();
+        const float   DistCm   = FVector::Dist(TargetPos, GetActorLocation());
+        SpringArm->SetRelativeLocation(FVector::ZeroVector);
+        SpringArm->SetWorldRotation((-ToTarget).Rotation());
+        SpringArm->TargetArmLength = FMath::Max(DistCm * 0.5f, 2000.0f);
+        break;
+    }
+
+    case ECameraMode::Docking:
+    {
+        const FVector TargetPos  = IsValid(TargetStation)
+            ? TargetStation->GetActorLocation()
+            : GravitySourcePosition;
+        SpringArm->SetRelativeLocation(FVector(300.0f, 0.0f, 0.0f));
+        SpringArm->TargetArmLength = 0.0f;
+        const FVector NoseWorld  = GetActorLocation()
+            + GetActorRotation().RotateVector(FVector(300.0f, 0.0f, 0.0f));
+        const FVector ToTarget   = (TargetPos - NoseWorld).GetSafeNormal();
+        if (!ToTarget.IsNearlyZero())
+            SpringArm->SetWorldRotation(ToTarget.Rotation());
+        break;
+    }
+    }
 }
 
 Vector3 ASpacecraftPawn::ToPhysics(const FVector& v) { return Vector3(v.X * CM_TO_M, v.Y * CM_TO_M, v.Z * CM_TO_M); }

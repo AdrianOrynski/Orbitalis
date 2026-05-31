@@ -1,5 +1,6 @@
 #include "GravityController.h"
-#include "../Spacecraft/SpacecraftPawn.h"   // <-- new include for Week 4
+#include "../Spacecraft/SpacecraftPawn.h"
+#include "../Mission/SpaceStation.h"
 
 AGravityController::AGravityController()
 {
@@ -26,6 +27,13 @@ void AGravityController::Tick(float DeltaTime)
         {
             ApplyGravityTo(Obj);
         }
+    }
+
+    // Apply gravity to space stations
+    for (ASpaceStation* ST : OrbitingStations)
+    {
+        if (IsValid(ST))
+            ApplyGravityToStation(ST);
     }
 
     // Apply gravity to player / AI spacecraft
@@ -111,6 +119,35 @@ void AGravityController::InitialiseAllSpacecraftOrbits()
                 SourceMass, GravitationalConstant);
         }
     }
+}
+
+
+void AGravityController::ApplyGravityToStation(ASpaceStation* Station) const
+{
+    const FVector SourcePos = GetActorLocation();
+    const FVector ObjectPos = Station->GetPhysicsPosition();
+    FVector Direction       = SourcePos - ObjectPos;
+    const double DistanceCm = Direction.Size();
+    const double DistanceM  = DistanceCm * 0.01;
+    if (DistanceM < MinDistance) return;
+    Direction /= static_cast<float>(DistanceCm);
+    const double Force = GravitationalConstant * SourceMass * Station->PhysBody.mass
+                         / (DistanceM * DistanceM);
+    Station->ApplyGravityForce(Direction * static_cast<float>(Force));
+}
+
+void AGravityController::RegisterSpaceStation(ASpaceStation* Station, bool bInitOrbit)
+{
+    if (!IsValid(Station) || OrbitingStations.Contains(Station)) return;
+    if (bInitOrbit)
+        Station->InitOrbit(Station->GetActorLocation(), GetActorLocation(),
+                           SourceMass, GravitationalConstant);
+    OrbitingStations.Add(Station);
+}
+
+void AGravityController::UnregisterSpaceStation(ASpaceStation* Station)
+{
+    OrbitingStations.Remove(Station);
 }
 
 // ---------------------------------------------------------------------------

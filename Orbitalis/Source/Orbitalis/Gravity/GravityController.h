@@ -9,6 +9,7 @@
 // Forward-declare so we avoid a circular include.
 // The pawn is in a different folder and includes us, so we go through a pointer.
 class ASpacecraftPawn;
+class ASpaceStation;
 
 /**
  * AGravityController
@@ -103,9 +104,23 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Gravity|Spacecraft")
     void UnregisterSpacecraft(ASpacecraftPawn* Spacecraft);
 
+    // -------------------------------------------------------
+    // Blueprint API – space stations
+    // -------------------------------------------------------
+
+    UFUNCTION(BlueprintCallable, Category = "Gravity|Station")
+    void RegisterSpaceStation(ASpaceStation* Station, bool bInitOrbit = true);
+
+    UFUNCTION(BlueprintCallable, Category = "Gravity|Station")
+    void UnregisterSpaceStation(ASpaceStation* Station);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Gravity|Station")
+    TArray<ASpaceStation*> OrbitingStations;
+
 private:
     void ApplyGravityTo(ASpaceObject* Object) const;
     void ApplyGravityToSpacecraft(ASpacecraftPawn* Spacecraft) const;
+    void ApplyGravityToStation(ASpaceStation* Station) const;
 
     void InitialiseAllOrbits();
     void InitialiseAllSpacecraftOrbits();

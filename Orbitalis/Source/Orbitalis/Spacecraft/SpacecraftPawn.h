@@ -6,12 +6,14 @@
 #include "../Gravity/GravityController.h"
 #include "ThrusterSystem.h"
 #include "InputActionValue.h"
+#include "Components/SphereComponent.h"
 
 #include "SpacecraftPawn.generated.h"
 
 class UInputMappingContext;
 class UInputAction;
 class USpringArmComponent;
+class ASpaceStation;
 class UCameraComponent;
 
 /**
@@ -42,6 +44,14 @@ class UCameraComponent;
  *
  *   Pitch / Yaw via mouse (Axis1D) for fine attitude control.
  */
+UENUM(BlueprintType)
+enum class ECameraMode : uint8
+{
+    Chase,      // default: behind the spacecraft
+    Overview,   // pulled back, shows spacecraft + station
+    Docking     // nose position, looking forward
+};
+
 UCLASS(BlueprintType, Blueprintable)
 class ORBITALIS_API ASpacecraftPawn : public APawn
 {
@@ -56,6 +66,7 @@ protected:
 public:
     virtual void Tick(float DeltaTime) override;
     virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+    virtual void CalcCamera(float DeltaTime, struct FMinimalViewInfo& OutResult) override;
 
     // ── Components ──────────────────────────────────────────────────────────
 
@@ -67,6 +78,10 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
     UCameraComponent* Camera;
+
+    /** Spacecraft collision sphere – triggers docking/collision detection. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+    USphereComponent* SpacecraftCollider;
 
     // ── Input mapping ───────────────────────────────────────────────────────
 
@@ -116,6 +131,16 @@ public:
     UInputAction* IA_Right_Left;      // Num6
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input|Right")
     UInputAction* IA_Right_Right;      // Num2
+
+    // Camera modes
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input|Camera")
+    UInputAction* IA_Cam_Chase;        // A – chase camera (default)
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input|Camera")
+    UInputAction* IA_Cam_Overview;     // S – overview (spacecraft + station)
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input|Camera")
+    UInputAction* IA_Cam_Docking;      // D – nose camera toward docking port
 
     // ── Physics ─────────────────────────────────────────────────────────────
 
@@ -215,8 +240,21 @@ private:
 
     FVector AngularVelocityRadPerSec = FVector::ZeroVector;
 
+    ECameraMode CurrentCameraMode = ECameraMode::Chase;
+
+    // Camera mode callbacks
+    void OnCamChase(const FInputActionValue&);
+    void OnCamOverview(const FInputActionValue&);
+    void OnCamDocking(const FInputActionValue&);
+
+    void UpdateCameraMode();
+    void TickCameraMode();
+
     UPROPERTY()
     AGravityController* GravitySource = nullptr;
+
+    UPROPERTY()
+    ASpaceStation* TargetStation = nullptr;
 
     FVector GravitySourcePosition = FVector::ZeroVector;
 };
